@@ -1,0 +1,1211 @@
+
+---
+title: "Predicting Wine Quality: A Comprehensive Modeling Project"
+author: "Your Name"
+output: html_notebook
+date: "`r Sys.Date()`"
+
+---
+
+# Predictive Wine Quality Model 
+
+
+## 1. Introduction
+
+### 1.1 Description
+Wine quality is a multifaceted attribute influenced by various chemical, physical, and sensory factors. With the increasing availability of data and advanced statistical techniques, predictive modeling has become a powerful tool to understand the complex relationships between wine characteristics and quality ratings. This project leverages modern machine learning, statistical modeling, and neural network approaches to predict wine quality based on attributes such as acidity, alcohol content, residual sugar, and more. Our goal is not only to build highly accurate models but also to provide interpretable insights into which features most strongly influence wine quality.
+
+###  1.2 Project Scope
+
+The scope of this project includes:
+
+- **Data Acquisition and Preprocessing:**  
+  Merging red and white wine datasets, performing thorough data cleaning, transformation, and exploratory analysis to ensure robust and high-quality input for our models.
+  
+- **Baseline Modeling:**  
+  Implementing multiple regression techniques (e.g., linear regression, random forest, gradient boosting, and support vector machines) using k-fold cross-validation to establish baseline performance metrics.
+  
+- **Advanced Modeling Techniques:**  
+  Incorporating neural networks and recurrent neural networks to capture non-linear relationships and complex interactions among predictors. Techniques such as early stopping and hyperparameter tuning are applied to enhance model performance and prevent overfitting.
+  
+- **Feature Selection and Model Optimization:**  
+  Employing methods like Sequential Forward Floating Search (SFFS) and recursive feature elimination (RFE) to identify the most relevant predictors. Systematic hyperparameter tuning using grid search and cross-validation ensures that the best-performing model is selected.
+  
+- **Visualization and Interpretation:**  
+  Creating comprehensive visualizations—including correlation matrices, performance curves, and feature importance plots—to validate model performance and gain insights into the influence of individual wine characteristics on quality.
+
+### 1.3 Applications of Results 
+
+The predictive wine quality model developed in this project has a wide range of potential applications, including:
+
+- **Winery Production Optimization:**  
+  Enable wineries to predict wine quality based on chemical measurements, allowing real-time process adjustments for consistent, high-quality output.
+  
+- **Quality Control and Process Improvement:**  
+  Identify key factors that influence quality to fine-tune fermentation, blending, and aging processes, ultimately enhancing product quality.
+  
+- **Consumer Guidance and Market Segmentation:**  
+  Assist retailers and wine enthusiasts in forecasting wine quality, which can help with pricing, product recommendations, and targeting specific market segments.
+  
+- **Research and Development:**  
+  Serve as a research tool for scientists and oenologists, offering insights into the science behind wine quality that can drive further experimentation and innovation.
+  
+- **Decision Support Systems:**  
+  Integrate with decision support systems to help vineyard managers and wine distributors make data-driven decisions regarding resource allocation, market positioning, and product launches.
+
+By combining robust predictive analytics with clear interpretability, this project aims to bridge the gap between data science and oenology, ultimately enabling more informed decisions in wine production and marketing.
+
+## 2. Data Exploration
+
+Before building predictive models, we perform an initial exploration of our dataset to understand its structure, distribution of key variables, and relationships among predictors.
+
+```{r}
+#| label: import-lib 
+# Load necessary libraries
+library(tidyverse)
+library(randomForest)
+library(MASS)
+library(tree)
+library(gbm)
+library(e1071)
+library(rpart)
+library(reshape2)
+library(caret)
+```
+
+```{r data-exploration, echo=TRUE, message=FALSE, warning=FALSE}
+# Load necessary libraries
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(GGally)
+
+# Load red and white wine datasets
+red <- read_csv2("winequality-red.csv")
+white <- read_csv2("winequality-white.csv")
+
+# Add a Type column to distinguish red and white wines
+red <- red %>% mutate(Type = "Red")
+white <- white %>% mutate(Type = "White")
+
+# Merge the datasets and remove missing values
+wine <- bind_rows(red, white) %>% na.omit()
+names(wine) <- gsub(" ", "_", names(wine))
+
+# Preview the data
+head(wine)
+str(wine)
+summary(wine)
+
+# Distribution of wine quality by type
+ggplot(wine, aes(x = quality, fill = Type)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Distribution of Wine Quality by Type",
+       x = "Wine Quality", y = "Count") +
+  theme_minimal()
+
+# Pairwise scatter plots and correlations of numeric variables
+ggpairs(wine[, sapply(wine, is.numeric)], 
+        title = "Pairwise Scatter Plots & Correlations")
+
+# Compute the correlation matrix for numeric features
+cor_matrix <- cor(wine[, sapply(wine, is.numeric)])
+corrplot(cor_matrix, method = "color", type = "upper",
+         tl.col = "black", tl.srt = 45, addCoef.col = "black", number.cex = 0.7,
+         title = "Correlation Matrix of Wine Features", mar = c(0,0,1,0))
+
+# Boxplots of key predictors by wine quality
+key_vars <- c("alcohol", "pH", "residual_sugar", "volatile_acidity")
+wine_long <- wine %>% pivot_longer(cols = all_of(key_vars), names_to = "Variable", values_to = "Value")
+
+ggplot(wine_long, aes(x = quality, y = Value, fill = quality)) +
+  geom_boxplot() +
+  facet_wrap(~ Variable, scales = "free") +
+  labs(title = "Boxplots of Key Predictors by Wine Quality") +
+  theme_minimal()
+## Pre-Tuning Models
+
+### Load Libraries
+
+```
+
+
+### 2.1  Data Preprocessing and Model Training
+
+#### a. Safe Numeric Conversion Function
+
+```{r}
+
+
+# Define a safe conversion function for numeric conversion
+safe_numeric_conversion <- function(x) {
+  converted <- suppressWarnings(as.numeric(x))
+  if (any(is.na(converted))) {
+    warning("NAs introduced by coercion")
+  }
+  return(converted)
+}
+```
+
+#### b. Data Preprocessing
+
+In this step, we apply the conversion function to all character columns in the red and white wine datasets. We also add a column to indicate wine type (0 for red, 1 for white), merge the datasets, and clean up the variable names.
+```{r}
+# Apply safe conversion and preprocess data
+red <- red %>% mutate(across(where(is.character), safe_numeric_conversion))
+white <- white %>% mutate(across(where(is.character), safe_numeric_conversion))
+
+red <- red %>% mutate(Type = 0)
+white <- white %>% mutate(Type = 1)
+
+merged <- bind_rows(red, white) %>% na.omit()
+names(merged) <- gsub(" ", "_", names(merged))
+```
+
+#### c. Setting Up Cross-Validation
+
+Here we define a 10-fold cross-validation scheme that will be used to evaluate our models.
+```{r}
+# Set up 10-fold cross-validation
+folds <- createFolds(merged$quality, k = 10)
+```
+
+#### d. Model Training with K-Fold Cross-Validation
+
+We then train several models (Linear Regression, Random Forest, Gradient Boosting, and SVM) using the predefined folds. For each fold, we compute performance metrics (RMSE and R²) for each model.
+
+```{r}
+# Initialize a list to store results
+results_list <- vector("list", 10)
+
+# Train models using k-fold cross-validation
+results_list <- lapply(names(folds), function(fold_index) {
+  train_indices <- folds[[fold_index]]
+  test_indices <- setdiff(1:nrow(merged), train_indices)
+  
+  train <- merged[train_indices, ]
+  test <- merged[test_indices, ]
+  
+  # Linear Regression
+  lm_model <- lm(quality ~ ., data = train)
+  lm_predictions <- predict(lm_model, newdata = test)
+  lm_rmse <- sqrt(mean((test$quality - lm_predictions)^2))
+  lm_r_squared <- cor(test$quality, lm_predictions)^2
+  
+  # Random Forest
+  rf_model <- randomForest(quality ~ ., data = train, ntree = 500, mtry = 3)
+  rf_predictions <- predict(rf_model, newdata = test)
+  rf_rmse <- sqrt(mean((test$quality - rf_predictions)^2))
+  rf_r_squared <- cor(test$quality, rf_predictions)^2
+  
+  # Boosting
+  gbm_model <- gbm(quality ~ ., data = train, distribution = "gaussian", n.trees = 500, interaction.depth = 3, shrinkage = 0.01, cv.folds = 5, n.minobsinnode = 10)
+  gbm_predictions <- predict(gbm_model, newdata = test, n.trees = 500)
+  gbm_rmse <- sqrt(mean((test$quality - gbm_predictions)^2))
+  gbm_r_squared <- cor(test$quality, gbm_predictions)^2
+  
+  # SVM
+  svm_model <- svm(quality ~ ., data = train, type = 'eps-regression', kernel = 'radial')
+  svm_predictions <- predict(svm_model, newdata = test)
+  svm_rmse <- sqrt(mean((test$quality - svm_predictions)^2))
+  svm_r_squared <- cor(test$quality, svm_predictions)^2
+
+  list(
+    LM_RMSE = lm_rmse,
+    LM_R2 = lm_r_squared,
+    RF_RMSE = rf_rmse,
+    RF_R2 = rf_r_squared,
+    GBM_RMSE = gbm_rmse,
+    GBM_R2 = gbm_r_squared,
+    SVM_RMSE = svm_rmse,
+    SVM_R2 = svm_r_squared
+  )
+})
+
+
+```
+
+### 2.2 Previous Results
+
+```{r}
+# Calculate averages of results
+average_results <- map_df(results_list, bind_rows) %>% 
+  summarise(across(everything(), mean))
+print(average_results)
+
+# Correlation matrix
+corr_matrix <- cor(merged[, sapply(merged, is.numeric)], use = "pairwise.complete.obs")
+
+# Melt the correlation matrix for plotting
+melted_corr_matrix <- reshape2::melt(corr_matrix)
+
+# Plotting correlation as scatter plot
+ggplot(melted_corr_matrix, aes(Var1, Var2, color = value)) +
+  geom_point() +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  labs(title = "Correlation Scatter Plot", x = "Variables", y = "Variables")
+
+```
+
+## 3. Improving Predictive Performance in Neural Networks through K-Fold Cross-Validation
+
+#### 3.1 Start Virtual Environment
+
+```{r}
+library(readr)
+library(dplyr)
+library(rsample)
+library(tidyverse)
+library(keras)
+ # starts virtual python enviroment to conduct analysis 
+keras::install_keras()
+
+```
+
+#### 3.2 Processing Data Set
+
+```{r}
+# load database, different from above because must be tensor, and "safe conversion"
+red <- read_csv2("winequality-red.csv")
+white <- read_csv2("winequality-white.csv")
+red <- na.omit(red)
+white<- na.omit(white)
+
+# safe conversion function
+safe_numeric_conversion <- function(x) {
+  converted <- suppressWarnings(as.numeric(x))
+  if (any(is.na(converted))) {
+    warning("NAs introduced by coercion")
+  }
+  return(converted)
+}
+
+red <- red %>% mutate(across(where(is.character), safe_numeric_conversion))
+white <- white %>% mutate(across(where(is.character), safe_numeric_conversion))
+red <- red %>% mutate(Type = 0)
+white <- white %>% mutate(Type = 1)
+
+
+
+merged <- bind_rows(red, white)
+merged <- na.omit(merged)
+names(merged) <- gsub(" ", "_", names(merged))
+
+summary(merged)
+```
+
+#### 3.3 Data Conversion
+
+```{r}
+#Source: https://cran.r-project.org/web/packages/keras/vignettes/sequential_model.html
+set.seed(123) # For reproducibility
+
+# Convert quality to a categorical variable
+merged$quality <- as.factor(merged$quality)
+
+# Split data into training and testing sets
+split <- initial_split(merged, prop = 0.7)
+train_data <- training(split)
+test_data <- testing(split)
+
+# Prepare training and test sets
+x_train <- as.matrix(train_data[, -which(names(train_data) == "quality")])
+y_train <- to_categorical(as.integer(train_data$quality) - 1)
+
+x_test <- as.matrix(test_data[, -which(names(test_data) == "quality")])
+y_test <- to_categorical(as.integer(test_data$quality) - 1)
+
+model <- keras_model_sequential() %>%
+  layer_dense(units = 128, activation = 'relu', input_shape = ncol(x_train)) %>%
+  layer_dense(units = length(levels(merged$quality)), activation = 'softmax')
+
+model %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = 'accuracy'
+)
+
+history <- model %>% fit(
+  x_train, 
+  y_train, 
+  epochs = 75, 
+  batch_size = 128, 
+  validation_split = 0.2
+)
+
+score <- model %>% evaluate(x_test, y_test)
+
+# Predict and extract the class with the highest probability
+predictions <- model %>% predict(x_test)
+predicted_classes <- apply(predictions, 1, which.max) 
+
+```
+
+```{r}
+cat('Test loss:', score[[1]], '\n')
+cat('Test accuracy:', score[[2]], '\n')
+```
+
+## 4. KNN and Tree Models
+
+```{r}
+library(class)
+library(rpart)
+library(ggplot2)
+```
+
+### 4.1 Merged Data
+
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+
+# Define all possible levels for 'quality'
+all_levels <- levels(factor(merged$quality))
+
+# Create indices for 10-fold cross-validation
+folds <- cut(seq(1, nrow(merged)), breaks = 10, labels = FALSE)
+
+# To store results
+results <- data.frame(Fold = integer(0), Model = character(0), Accuracy = numeric(0))
+
+for (k in 1:10) {
+  # Split data into training and testing based on folds
+  test_indices <- which(folds == k)
+  train_indices <- setdiff(1:nrow(merged), test_indices)
+  
+  train_data <- merged[train_indices, ]
+  test_data <- merged[test_indices, ]
+  
+  # Ensure 'quality' is a factor with all levels set
+  train_labels <- factor(train_data$quality, levels = all_levels)
+  test_labels <- factor(test_data$quality, levels = all_levels)
+  
+  train_points <- train_data[, names(train_data) != "quality"]
+  test_points <- test_data[, names(test_data) != "quality"]
+  
+  # KNN Model
+  knn_predictions <- knn(train = train_points, test = test_points, cl = train_labels, k = 10)
+  knn_accuracy <- sum(knn_predictions == test_labels) / length(test_labels)
+  
+  # Decision Tree Model
+  tree_model <- rpart(quality ~ ., data = train_data, method = "class")
+  tree_predictions <- predict(tree_model, test_points, type = "class")
+  
+  # Ensure tree_predictions are factors with correct levels
+  tree_predictions <- factor(tree_predictions, levels = levels(test_labels))
+  
+  tree_accuracy <- sum(tree_predictions == test_labels) / length(test_labels)
+  
+  # Collect results
+  results <- rbind(results, data.frame(Fold = k, Model = "KNN", Accuracy = knn_accuracy))
+  results <- rbind(results, data.frame(Fold = k, Model = "Tree", Accuracy = tree_accuracy))
+}
+
+# Plot results using ggplot2
+ggplot(results, aes(x = as.factor(Fold), y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Model Comparison Across Folds in Merged Dataset", x = "Fold", y = "Accuracy") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")
+
+```
+
+### 4.2  Red Wine Model 
+
+```{r}
+
+# Set the seed for reproducibility
+set.seed(123)
+
+# Define all possible levels for 'quality'
+all_levels <- levels(factor(red$quality))
+
+# Create indices for 10-fold cross-validation
+folds <- cut(seq(1, nrow(red)), breaks = 10, labels = FALSE)
+
+# To store results
+results <- data.frame(Fold = integer(0), Model = character(0), Accuracy = numeric(0))
+
+for (k in 1:10) {
+  # Split data into training and testing based on folds
+  test_indices <- which(folds == k)
+  train_indices <- setdiff(1:nrow(red), test_indices)
+  
+  train_data <- red[train_indices, ]
+  test_data <- red[test_indices, ]
+  
+  # Ensure 'quality' is a factor with all levels set
+  train_labels <- factor(train_data$quality, levels = all_levels)
+  test_labels <- factor(test_data$quality, levels = all_levels)
+  
+  train_points <- train_data[, names(train_data) != "quality"]
+  test_points <- test_data[, names(test_data) != "quality"]
+  
+  # KNN Model
+  knn_predictions <- knn(train = train_points, test = test_points, cl = train_labels, k = 10)
+  knn_accuracy <- sum(knn_predictions == test_labels) / length(test_labels)
+  
+  # Decision Tree Model
+  tree_model <- rpart(quality ~ ., data = train_data, method = "class")
+  tree_predictions <- predict(tree_model, test_points, type = "class")
+  
+  # Ensure tree_predictions are factors with correct levels
+  tree_predictions <- factor(tree_predictions, levels = levels(test_labels))
+  
+  tree_accuracy <- sum(tree_predictions == test_labels) / length(test_labels)
+  
+  # Collect results
+  results <- rbind(results, data.frame(Fold = k, Model = "KNN", Accuracy = knn_accuracy))
+  results <- rbind(results, data.frame(Fold = k, Model = "Tree", Accuracy = tree_accuracy))
+}
+
+# Plot results using ggplot2
+ggplot(results, aes(x = as.factor(Fold), y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Model Comparison Across Folds in Red Wine Dataset", x = "Fold", y = "Accuracy") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")
+
+```
+
+###  4.3 White Wine
+
+```{r}
+
+# Define all possible levels for 'quality'
+all_levels <- levels(factor(white$quality))
+
+# Create indices for 10-fold cross-validation
+folds <- cut(seq(1, nrow(white)), breaks = 10, labels = FALSE)
+
+# To store results
+results <- data.frame(Fold = integer(0), Model = character(0), Accuracy = numeric(0))
+
+for (k in 1:10) {
+  # Split data into training and testing based on folds
+  test_indices <- which(folds == k)
+  train_indices <- setdiff(1:nrow(white), test_indices)
+  
+  train_data <- white[train_indices, ]
+  test_data <- white[test_indices, ]
+  
+  # Ensure 'quality' is a factor with all levels set
+  train_labels <- factor(train_data$quality, levels = all_levels)
+  test_labels <- factor(test_data$quality, levels = all_levels)
+  
+  train_points <- train_data[, names(train_data) != "quality"]
+  test_points <- test_data[, names(test_data) != "quality"]
+  
+  # KNN Model
+  knn_predictions <- knn(train = train_points, test = test_points, cl = train_labels, k = 10)
+  knn_accuracy <- sum(knn_predictions == test_labels) / length(test_labels)
+  
+  # Decision Tree Model
+  tree_model <- rpart(quality ~ ., data = train_data, method = "class")
+  tree_predictions <- predict(tree_model, test_points, type = "class")
+  
+  # Ensure tree_predictions are factors with correct levels
+  tree_predictions <- factor(tree_predictions, levels = levels(test_labels))
+  
+  tree_accuracy <- sum(tree_predictions == test_labels) / length(test_labels)
+  
+  # Collect results
+  results <- rbind(results, data.frame(Fold = k, Model = "KNN", Accuracy = knn_accuracy))
+  results <- rbind(results, data.frame(Fold = k, Model = "Tree", Accuracy = tree_accuracy))
+}
+
+# Plot results using ggplot2
+ggplot(results, aes(x = as.factor(Fold), y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Model Comparison Across Folds in White Wine Dataset", x = "Fold", y = "Accuracy") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")
+```
+
+## 5. RNN for Separate Red and White
+
+Based off model from: <https://www.semanticscholar.org/paper/Autoencoder-vs.-Regression-Neural-Networks-for-Wine-Baumann/580b14b7645079aeeead97e463f80a48eb8d5f63>
+
+```{r}
+library(tidyverse)
+library(keras)
+```
+
+### 5.1 Define Model
+#### a. Data Selection and Hyperparameters
+
+```{r}
+
+# Load libraries
+library(readr)
+library(dplyr)
+
+# Read datasets
+red <- read_csv2("winequality-red.csv")
+white <- read_csv2("winequality-white.csv")
+
+# Remove NA values
+red <- na.omit(red)
+white <- na.omit(white)
+
+# Safe conversion function
+safe_numeric_conversion <- function(x) {
+  converted <- suppressWarnings(as.numeric(x))
+  if (any(is.na(converted))) {
+    warning("NAs introduced by coercion")
+  }
+  return(converted)
+}
+
+# Convert character columns to numeric
+red <- red %>% mutate(across(where(is.character), safe_numeric_conversion))
+white <- white %>% mutate(across(where(is.character), safe_numeric_conversion))
+
+# Add a 'Type' column to identify the dataset
+red$Type <- 0
+white$Type <- 1
+
+# Preprocess function (without one-hot encoding)
+preprocess_data <- function(data) {
+  x_data <- as.matrix(data[, !colnames(data) %in% c("quality", "Type")])
+  y_data <- data$quality  # Assuming 'quality' is already numeric
+  list(x = x_data, y = y_data)
+}
+
+# Preprocess both datasets
+red_preprocessed <- preprocess_data(red)
+white_preprocessed <- preprocess_data(white)
+
+```
+
+#### b. Base Model for Red and White Wine
+
+```{r}
+
+build_train_model <- function(x, y, params) {
+  # Convert y to categorical format
+  num_classes <- length(unique(y))
+  y_cat <- to_categorical(y - min(y), num_classes)
+  
+  model <- keras_model_sequential() %>%
+    layer_dense(units = params$num_neurons_input, input_shape = c(ncol(x)), activation = 'relu') %>%
+    layer_dropout(rate = params$dropout_rate)
+  
+  for (i in seq_len(params$num_hidden_layers)) {
+    model %>% layer_dense(units = params$num_neurons, activation = 'relu')
+    model %>% layer_dropout(rate = params$dropout_rate)
+  }
+  
+  model %>% layer_dense(units = num_classes, activation = 'softmax')
+  
+  model %>% compile(
+    loss = 'categorical_crossentropy',
+    optimizer = optimizer_rmsprop(lr = params$learning_rate),
+    metrics = 'accuracy'
+  )
+
+  history <- model %>% fit(
+    x, y_cat,
+    epochs = params$num_epochs,
+    batch_size = params$batch_size,
+    validation_split = 0.2,  # Using 20% of data for validation
+    callbacks = list(callback_early_stopping(patience = 10, restore_best_weights = TRUE))
+  )
+  
+  list(model = model, history = history)
+}
+
+
+
+```
+
+### 5.2 Red Wine
+
+#### a. Model Training for Red Wine 
+Training the model for red wine quality prediction using the base hyperparameters.
+**Hyperaparameters:**:
+ - num_neurons_input = 12 
+ - num_neurons = 64
+ - num_hidden_layers = 4
+ - activation_hidden = 'relu'
+ - dropout_rate = 0.1
+ - learning_rate = 0.1
+ - batch_size = 128
+ - num_epochs = 75
+  
+```{r}
+
+# hyperparameters
+params <- list(
+  num_neurons_input = 12,  
+  num_neurons = 64,
+  num_hidden_layers = 4,
+  activation_hidden = 'relu',
+  dropout_rate = 0.1,
+  learning_rate = 0.1,
+  batch_size = 128,
+  num_epochs = 75
+)
+
+# Train model for Red Wine
+red_results <- build_train_model(red_preprocessed$x, red_preprocessed$y, params)
+
+```
+
+#####  i. Results Red
+
+```{r}
+cat("Red Wine Model Accuracy:", max(red_results$history$metrics$val_accuracy), "\n")
+```
+
+#### b. Model Training for White Wine 
+Training the model for white wine quality prediction adjusting base hyperparameters.
+
+**Hyperaparameters:**:
+ - num_neurons_input = 12 
+ - num_neurons = 72
+ - num_hidden_layers = 4
+ - activation_hidden = 'relu'
+ - dropout_rate = 0.1
+ - learning_rate = 0.1
+ - batch_size = 128
+ - num_epochs = 75
+
+```{r}
+# hyperparameters
+params <- list(
+  num_neurons_input = 12,  
+  num_neurons = 72,
+  num_hidden_layers = 4,
+  activation_hidden = 'relu',
+  dropout_rate = 0.1,
+  learning_rate = 0.1,
+  batch_size = 128,
+  num_epochs = 75
+)
+# Train model for White Wine
+white_results <- build_train_model(white_preprocessed$x, white_preprocessed$y, params)
+```
+
+##### i. Results White
+
+```{r}
+
+cat("White Wine Model Accuracy:", max(white_results$history$metrics$val_accuracy), "\n")
+
+```
+
+### 5.3 Plotting Accuracy and Loss of red and White Wine Quality Prediction
+
+```{r}
+library(ggplot2)
+
+# Function to normalize values
+normalize <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+# Plot loss and accuracy curves for red wine
+red_loss <- normalize(red_results$history$metrics$loss)
+red_accuracy <- normalize(red_results$history$metrics$accuracy)
+red_epochs <- seq_along(red_loss)
+
+red_data <- data.frame(epoch = red_epochs, loss = red_loss, accuracy = red_accuracy)
+```
+
+##### a. Plotting Red 
+```{r}
+red_plot <- ggplot(red_data, aes(x = epoch)) +
+  geom_line(aes(y = loss, color = "Loss"), size = 1) +
+  geom_line(aes(y = accuracy, color = "Accuracy"), size = 1) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Epoch", y = "Normalized Value", color = "Metric") +
+  ggtitle("Red Wine Model Loss and Accuracy") +
+  theme_minimal()
+```
+
+##### b. Plotting White
+```{r}
+# Plot loss and accuracy curves for white wine
+white_loss <- normalize(white_results$history$metrics$loss)
+white_accuracy <- normalize(white_results$history$metrics$accuracy)
+white_epochs <- seq_along(white_loss)
+
+white_data <- data.frame(epoch = white_epochs, loss = white_loss, accuracy = white_accuracy)
+
+white_plot <- ggplot(white_data, aes(x = epoch)) +
+  geom_line(aes(y = loss, color = "Loss"), size = 1) +
+  geom_line(aes(y = accuracy, color = "Accuracy"), size = 1) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Epoch", y = "Normalized Value", color = "Metric") +
+  ggtitle("White Wine Model Loss and Accuracy") +
+  theme_minimal()
+
+# Display plots
+print(red_plot)
+print(white_plot)
+
+```
+
+## 6. Predictive Modeling and Feature Selection for Red and White Wine Quality Using Random Forest, SVM and SFFS
+
+source: <https://www.semanticscholar.org/paper/A-Deep-Neural-Network-Approach-to-Predict-the-Wine-Kumar-Kraeva/0df3d5c29dd801d2afdc4040ab3e695c45480eb9>
+
+```{r}
+# Load required libraries
+library(doParallel)
+library(caret)
+library(mlbench)
+library(FSelectorRcpp)
+registerDoParallel(cores = detectCores())
+```
+
+### 6.1 Red Wine Quality Prediction Training and Feature Selection
+
+```{r}
+# Set seed for reproducibility
+set.seed(1)
+
+# Load the data
+red_wine <- read.csv2("winequality-red.csv")
+red_wine <- na.omit(red_wine)
+safe_numeric_conversion <- function(x) {
+  converted <- suppressWarnings(as.numeric(x))
+  if (any(is.na(converted))) {
+    warning("NAs introduced by coercion")
+  }
+  return(converted)
+}
+
+# Apply safe conversion and preprocess data
+red_wine <- red_wine %>% mutate(across(where(is.character), safe_numeric_conversion))
+
+# Ensure quality is a factor
+red_wine$quality <- as.factor(red_wine$quality)
+
+# Splitting the data into training and testing sets
+split_red <- createDataPartition(red_wine$quality, p=0.8, list=FALSE)
+
+train_red <- red_wine[split_red,]
+test_red <- red_wine[-split_red,]
+train_red$alcohol <- as.numeric(as.character(train_red$alcohol))
+test_red$alcohol <- as.numeric(as.character(test_red$alcohol))
+
+
+# Feature selection using Sequential Forward Floating Search (SFFS)
+control_red <- rfeControl(functions=rfFuncs,
+                          method="cv",  
+                          number=10,  
+                          verbose= TRUE,  
+                          allowParallel=TRUE)  
+
+# Run RFE
+subset_red <- rfe(train_red[,1:11], train_red$quality, sizes=c(1:11), rfeControl=control_red)
+
+```
+
+#### a. SVM Model and Results
+
+```{r}
+# Define training control
+train_control <- trainControl(
+  method = "cv",  # using cross-validation
+  number = 5,  # number of folds in cross-validation
+  allowParallel = TRUE  # enable parallel processing
+)
+
+# Preprocess the data: Center and scale the predictors
+preProcValues <- preProcess(train_red[,c(subset_red$optVariables, "quality")], method = c("center", "scale"))
+train_processed <- predict(preProcValues, train_red)
+
+# Train the SVM model
+model_svm <- train(quality~., data = train_processed, 
+                   method = "svmLinear",
+                   trControl = train_control)
+
+# Evaluate the model on processed test data
+test_processed <- predict(preProcValues, test_red)
+predictions_svm <- predict(model_svm, test_processed)
+conf_matrix_svm <- confusionMatrix(predictions_svm, test_processed$quality)
+```
+
+##### i. Results for SVM Model (Confusion Matrix)
+```{r}
+# Print the confusion matrix
+print(conf_matrix_svm)
+
+
+
+```
+
+#### b. Random Forest Model
+
+```{r}
+# Build models using selected features
+model_red <- train(quality~., data=train_red[,c(subset_red$optVariables, "quality")], 
+                   method="rf", 
+                   trControl=trainControl(verboseIter=TRUE, allowParallel=TRUE))
+
+
+
+# Evaluate models
+predictions_red <- predict(model_red, test_red)
+predictions_red <- as.factor(predictions_red)
+conf_matrix_red <- confusionMatrix(predictions_red, test_red$quality)
+
+```
+
+##### i. Results for Random Forest Model (Confusion Matrix)
+
+```{r}
+print(conf_matrix_red)
+```
+
+#### Results for Selected Features
+
+```{r}
+# If your RFE object provides an "Overall" importance metric
+selected_df <- subset_red$variables %>% 
+  filter(Variables %in% subset_red$optVariables)
+
+# Plot feature importance
+ggplot(selected_df, aes(x = reorder(Variables, Overall), y = Overall)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Variable Importance for Selected Features",
+       x = "Feature", y = "Importance Score") +
+  theme_minimal()
+```
+
+### 6.2  White Wine Quality Prediction Training and Feature Selection
+
+```{r}
+set.seed(123)
+
+white_wine <- read.csv2("winequality-white.csv")
+white_wine <- na.omit(white_wine)
+white_wine <- na.omit(white_wine)
+safe_numeric_conversion <- function(x) {
+  converted <- suppressWarnings(as.numeric(x))
+  if (any(is.na(converted))) {
+    warning("NAs introduced by coercion")
+  }
+  return(converted)
+}
+
+# Apply safe conversion and preprocess data
+white_wine <- white_wine %>% mutate(across(where(is.character), safe_numeric_conversion))
+
+# Ensure quality is a factor
+white_wine$quality <- as.factor(white_wine$quality)
+
+# Splitting the data 
+split_white <- createDataPartition(white_wine$quality, p=0.8, list=FALSE)
+train_white <- white_wine[split_white,]
+test_white <- white_wine[-split_white,]
+
+# Feature selection using Sequential Forward Floating Search (SFFS)
+control_white <- rfeControl(functions=rfFuncs, method="cv", number=10, verbose=TRUE, allowParallel=TRUE)
+subset_white <- rfe(train_white[,1:11], train_white$quality, sizes=c(1:11), rfeControl=control_white)
+
+
+
+
+```
+
+#### a. SVM Model and Results
+
+```{r}
+# Define training control
+train_control <- trainControl(
+  method = "cv",  # using cross-validation
+  number = 5,  # number of folds in cross-validation
+  allowParallel = TRUE  # enable parallel processing
+)
+
+# Preprocess the data
+preProcValues <- preProcess(train_white[,c(subset_red$optVariables, "quality")], method = c("center", "scale"))
+train_processed <- predict(preProcValues, train_white)
+
+# Train the SVM 
+model_svm <- train(quality~., data = train_processed, 
+                   method = "svmLinear",
+                   trControl = train_control)
+
+
+test_processed <- predict(preProcValues, test_white)
+predictions_svm <- predict(model_svm, test_processed)
+conf_matrix_svm <- confusionMatrix(predictions_svm, test_processed$quality)
+```
+
+##### i. Results for SVM Model (Confusion Matrix)
+```{r}
+# Print the confusion matrix
+print(conf_matrix_svm)
+
+
+```
+
+#### b. Random Forest Model
+
+```{r}
+# Build models using selected features
+library(doParallel)
+registerDoParallel(cores = detectCores())
+model_white <- train(quality~., data=train_white[,c(subset_white$optVariables, "quality")], method="rf", trControl=trainControl(verboseIter=TRUE, allowParallel=TRUE))
+
+predictions_white <- predict(model_white, test_white)
+predictions_white <- as.factor(predictions_white)
+conf_matrix_white <- confusionMatrix(predictions_white, test_white$quality)
+
+```
+
+##### i. Results for Random Forest Model (Confusion Matrix)
+
+```{r}
+print(conf_matrix_white)
+
+```
+
+#### c. Results for Feature Selection
+
+```{r}
+# Print selected features
+# Create a dataframe with the selected features and assign a rank/order
+selected_white <- data.frame(
+  Feature = subset_white$optVariables,
+  Rank = seq_along(subset_white$optVariables)
+)
+
+# Plot the features using a horizontal bar chart
+ggplot(selected_white, aes(x = reorder(Feature, Rank), y = Rank)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Ranking of Selected Features for White Wine",
+       x = "Feature", y = "Rank (Lower is better)") +
+  theme_minimal()
+```
+
+## 7. Visualization of Individual Features
+
+```{r}
+library(splines)
+library(tree)
+library(randomForest)
+library(MASS)
+library(e1071)
+library(class)
+```
+
+```{r}
+
+red <- read_csv2("winequality-red.csv")
+white <- read_csv2("winequality-white.csv")
+
+
+safe_numeric_conversion <- function(x) {
+  converted <- suppressWarnings(as.numeric(x))
+  if (any(is.na(converted))) {
+    warning("NAs introduced by coercion")
+  }
+  return(converted)
+}
+
+# Apply safe conversion and preprocess data
+red <- red %>% mutate(across(where(is.character), safe_numeric_conversion))
+white <- white %>% mutate(across(where(is.character), safe_numeric_conversion))
+
+red <- red %>% mutate(Type = 0)
+white <- white %>% mutate(Type = 1)
+
+d <- bind_rows(red, white) %>% na.omit()
+names(d) <- gsub(" ", "_", names(d))
+
+
+n<-nrow(d)
+train<-sample(x = 1:n, size = round(0.75*n), replace = FALSE)
+train<-sort(train)
+test<-setdiff(1:n,train)
+
+
+
+d$quality<-as.numeric(d$quality)
+#k-fold cross validation to select regression spline degree
+perform_k_fold_cv <- function(data, k = 10, deg) {
+  # Calculate the number of rows in the dataset
+  n <- nrow(data)
+  
+  # Create an empty list to store the results of each fold
+  fold_results <- rep(NA,times=k)
+  
+  # Calculate the number of rows in each fold
+  fold_size <- floor(n / k)
+  
+  # Randomly shuffle the row indices
+  indices <- sample(1:n)
+  
+  # Perform k-fold cross-validation
+  for (i in 1:k) {
+    # Calculate the start and end indices for the current fold
+    start_index <- ((i - 1) * fold_size) + 1
+    end_index <- min(i * fold_size, n)
+    
+    # Extract the indices for the current fold
+    test_indices <- indices[start_index:end_index]
+    train_indices <- indices[-c(start_index:end_index)]
+    
+    # Subset the data into training and testing sets
+    train_data <- data[train_indices, ]
+    test_data <- data[test_indices, ]
+    
+    # Fit the model using the provided function and training data
+    model <- sp.fit<-lm(quality~bs(chlorides+sulphates+fixed_acidity+free_sulfur_dioxide+alcohol+volatile_acidity+total_sulfur_dioxide+citric_acid+density+pH+residual_sugar
+                                   ,degree=deg),data=train_data)
+    
+    preds<-predict(model,newdata=test_data)
+    preds<-round(preds) #could experiment without rounding (or take it to be above or below)
+    fold_results[i] <- mean((preds-test_data$quality)^2)
+  }
+  
+  # Return the results of each fold
+  return(fold_results)
+}
+
+#find the best degree
+test.err.est<-rep(NA,times=10)
+for(deg in 1:10){
+  test.err.est[deg]<-mean(perform_k_fold_cv(d,k=10,deg))
+}
+best.deg<-which.min(test.err.est)
+#quadratic regression splines are the best as selected by cross validation
+
+
+perform_k_fold_cv2 <- function(data, k = 10, knots) {
+  # Calculate the number of rows in the dataset
+  n <- nrow(data)
+  
+  # Create an empty list to store the results of each fold
+  fold_results <- rep(NA,times=k)
+  
+  # Calculate the number of rows in each fold
+  fold_size <- floor(n / k)
+  
+  # Randomly shuffle the row indices
+  indices <- sample(1:n)
+  
+  # Perform k-fold cross-validation
+  for (i in 1:k) {
+    # Calculate the start and end indices for the current fold
+    start_index <- ((i - 1) * fold_size) + 1
+    end_index <- min(i * fold_size, n)
+    
+    # Extract the indices for the current fold
+    test_indices <- indices[start_index:end_index]
+    train_indices <- indices[-c(start_index:end_index)]
+    
+    # Subset the data into training and testing sets
+    train_data <- data[train_indices, ]
+    test_data <- data[test_indices, ]
+    
+    # Fit the model using the provided function and training data
+    model <- sp.fit<-lm(quality~bs(chlorides+sulphates+fixed_acidity+free_sulfur_dioxide+alcohol+volatile_acidity+total_sulfur_dioxide+citric_acid+density+pH+residual_sugar
+                                   ,degree=2,df=knots),data=train_data)
+    
+    preds<-predict(model,newdata=test_data)
+    preds<-round(preds) #could experiment without rounding (or take it to be above or below)
+    fold_results[i] <- mean((preds-test_data$quality)^2)
+  }
+  
+  # Return the results of each fold
+  return(fold_results)
+}
+#find the best degree
+test.err.est<-rep(NA,times=17)
+for(knots in 4:20){
+  test.err.est[knots-3]<-mean(perform_k_fold_cv2(d,k=10,knots))
+}
+best.df<-which.min(test.err.est)+3 #best number of knots
+
+best.spline<-sp.fit<-lm(quality~bs(chlorides+sulphates+fixed_acidity+free_sulfur_dioxide+alcohol+volatile_acidity+total_sulfur_dioxide+citric_acid+density+pH+residual_sugar
+                                   ,degree=best.deg,df=best.df),data=d[train,])
+best.preds<-predict(best.spline,newdata=d[test,])
+sqrt(mean((best.preds-d$quality[test])^2))
+best.preds<-round(best.preds)
+mean((best.preds-d$quality[test])^2)
+
+best.preds<-predict(best.spline,newdata=d[train,])
+mean((best.preds-d$quality[train])^2)
+sqrt(mean((best.preds-d$quality[train])^2))
+summary(best.spline)
+
+
+
+```
+
+### 7.1 Boxplot: Quality by Wine Type
+```{r improved-plots, message=FALSE, warning=FALSE, fig.height=8, fig.width=10}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# Ensure our data frame 'd' is properly formatted
+# (Assuming 'd' is your merged dataset with variables renamed appropriately)
+d <- d %>% mutate(Type = factor(Type, labels = c("Red", "White")))
+
+# 1. Boxplot: Quality by Wine Type
+p_box <- ggplot(d, aes(x = Type, y = quality, fill = Type)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Wine Quality by Type", x = "Wine Type", y = "Quality") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+### 7.2 Faceted Scatter Plots: Quality vs. Key Predictors
+```{r improved-plots, message=FALSE, warning=FALSE, fig.height=8, fig.width=10}
+# 2. Faceted Scatter Plots: Quality vs. Key Predictors
+# Select key predictors you want to visualize
+predictors <- c("alcohol", "chlorides", "citric_acid", "volatile_acidity", "residual_sugar",
+                "free_sulfur_dioxide", "total_sulfur_dioxide", "density", "fixed_acidity", "pH", "sulphates")
+
+# Pivot the data to long format for faceting
+d_long <- d %>% 
+  select(quality, all_of(predictors)) %>% 
+  pivot_longer(cols = -quality, names_to = "Variable", values_to = "Value")
+
+p_facet <- ggplot(d_long, aes(x = Value, y = quality)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  geom_smooth(method = "lm", se = FALSE, color = "firebrick", size = 0.8) +
+  facet_wrap(~ Variable, scales = "free_x") +
+  labs(title = "Wine Quality vs. Predictors", x = "Predictor Value", y = "Quality") +
+  theme_minimal() +
+  theme(strip.background = element_rect(fill = "lightgrey", color = "black"))
+```
+
+### 7.3 Gradient Plot Example: Quality by Alcohol and Chlorides
+```{r improved-plots, message=FALSE, warning=FALSE, fig.height=8, fig.width=10}
+# 3. Gradient Plot Example: Quality by Alcohol and Chlorides
+gradient_plot <- function(cov1, cov2) {
+  # Sample 500 rows for clarity (if dataset is large)
+  set.seed(123)
+  ind <- sample(1:nrow(d), 500)
+  ggplot(d[ind, ], aes_string(x = cov1, y = cov2, color = "quality")) +
+    geom_point(alpha = 0.7) +
+    scale_color_gradient(low = "black", high = "blue") +
+    labs(title = paste("Wine Quality by", cov1, "and", cov2),
+         x = cov1, y = cov2, color = "Quality") +
+    theme_minimal()
+}
+
+p_gradient <- gradient_plot("alcohol", "chlorides")
+```
+
+### 7.4 Displaying the Plots Together
+```{r}
+# Display the plots together using gridExtra or patchwork
+library(gridExtra)
+grid.arrange(p_box, p_facet, p_gradient, ncol = 1)
+```
